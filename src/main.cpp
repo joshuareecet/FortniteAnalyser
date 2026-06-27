@@ -6,24 +6,53 @@
 #include <deque>
 #include <functional>
 #include <helpers/thread_safe_queue.hpp>
+#include <chrono>
 
-void capture_video(cv::VideoCapture cap){
-    // need to figure out something better to do here
+using tsq = mtq::ThreadSafeQueue<cv::Mat>;
+
+void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue){
+    // maybe we throw here instead?
     if ( !cap.isOpened() ) return;
-
-    double fps = cap.get(cv::CAP_PROP_FPS);
-    int width = cap.get(cv::CAP_PROP_FRAME_WIDTH);    
-    int height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);    
-    int frame_count = cap.get(cv::CAP_PROP_FRAME_COUNT);
-
-    std::cout << "\nfps: " << fps << "\nwidth: " << width;
-    std::cout << "\nheight: " << height << "\nframe count: " << frame_count << std::endl;
-
-    cv::Mat frame;
     
-    while (cap.read(frame)){
-        imshow("Video", frame);
-        if (cv::waitKey(1000/fps) == 27) break;
+    double fps = cap.get(cv::CAP_PROP_FPS);
+    std::size_t frame_count = cap.get(cv::CAP_PROP_FRAME_COUNT);
+    
+    frame_queue.set_fps(fps);
+    cv::Mat end_of_stream {};
+    
+    for (std::size_t i {0}; i < frame_count; ++i){
+        cv::Mat frame {};
+        bool video_finished = !cap.read(frame);
+        if (video_finished) {
+            break;
+        }
+        
+        while (!frame_queue.push_front(frame)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{static_cast<int>(1000/fps)});
+        }
+    }
+    
+    while (!frame_queue.push_front(end_of_stream)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{static_cast<int>(1000/fps)});
+    }
+    
+    std::cout << "eof: " << end_of_stream.total();
+}
+
+void display_video(tsq& frame_queue){
+    
+    cv::Mat frame;
+    double fps {frame_queue.get_fps()};
+    while (true){
+        if (!frame_queue.empty()){
+            frame_queue.pop_back(std::ref(frame));
+            
+            // close if we got end_of_stream frame. we can switch to a signal later.
+            if (frame.total() == 0) return;
+
+            cv::imshow("Gameplay",frame);
+        }
+        if (cv::waitKey(1000/fps) == 27) return;
     }
 }
 
@@ -38,9 +67,11 @@ int main(int argc, char** argv )
         path = "./gameplay.mp4";
     }
 
+    tsq frame_queue{};  
     cv::VideoCapture cap(path);
-    std::jthread display_thread(capture_video, cap);
     
-    display_thread.join();
+    std::jthread display_thread(display_video, std::ref(frame_queue));
+    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue));
+    
     return 0;
 }

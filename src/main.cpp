@@ -5,7 +5,7 @@
 #include <mutex>
 #include <deque>
 #include <functional>
-
+#include <helpers/thread_safe_queue.hpp>
 
 void capture_video(cv::VideoCapture cap){
     // need to figure out something better to do here

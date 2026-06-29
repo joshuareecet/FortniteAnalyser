@@ -21,7 +21,7 @@ namespace mtq{
     std::deque<T> queue_{};
     std::size_t max_queue_size_ {};
     double fps_ {60};
-    
+        
     mutable std::mutex mq_{};
     mutable std::mutex mdata_{};
     
@@ -31,7 +31,6 @@ namespace mtq{
         ThreadSafeQueue()
         : max_queue_size_ {10} {}
         
-
         ThreadSafeQueue(std::initializer_list<T> init_list, std::size_t max_queue_size)
             : queue_{init_list} , max_queue_size_{max_queue_size} {}
         
@@ -48,11 +47,21 @@ namespace mtq{
         std::deque<T> copy_queue() const{
             std::lock_guard<std::mutex> lock(mq_);
             return queue_;
-        }
+        }           
         
+        // read-only methods
         bool empty() const {
             std::lock_guard<std::mutex> lock(mq_);
             return queue_.empty();
+        }
+        std::shared_ptr<const T> back() const{
+            // maybe we could make these shared lock?
+            std::lock_guard<std::mutex> lock(mq_);
+            return std::make_shared(queue_.back());
+        }
+        std::shared_ptr<const T> front() const{
+            std::lock_guard<std::mutex> lock(mq_);
+            return std::make_shared(queue_.front());
         }
 
         // push, pop methods
@@ -110,7 +119,7 @@ namespace mtq{
             }
             fps_ = fps;
         }
-        double get_fps(){
+        double get_fps() const{
             std::lock_guard<std::mutex> lock_fps{mdata_};
             return fps_;
         }

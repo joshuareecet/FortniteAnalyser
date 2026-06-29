@@ -43,13 +43,18 @@ namespace mtq{
         ThreadSafeQueue(ThreadSafeQueue&&) = delete;
         ThreadSafeQueue& operator=(ThreadSafeQueue&&) = delete;
 
-        // get snapshot of entire deque
-        std::deque<T> copy_queue() const{
+
+        // operator overloads -----------------------------------------------------
+        T operator()(std::size_t i){
             std::lock_guard<std::mutex> lock(mq_);
-            return queue_;
-        }           
-        
-        // read-only methods
+            if (i >= queue_.size()) {
+                throw std::invalid_argument("ERROR: invalid index!");
+            }
+            return queue_[i];
+        }
+              
+
+        // read-only methods -----------------------------------------------------
         bool empty() const {
             std::lock_guard<std::mutex> lock(mq_);
             return queue_.empty();
@@ -63,8 +68,18 @@ namespace mtq{
             std::lock_guard<std::mutex> lock(mq_);
             return std::make_shared(queue_.front());
         }
+        std::size_t size() const{
+            std::lock_guard<std::mutex> lock(mq_);
+            return queue_.size();
+        }
 
-        // push, pop methods
+        // get snapshot of entire deque
+        std::deque<T> copy_queue() const{
+            std::lock_guard<std::mutex> lock(mq_);
+            return queue_;
+        }       
+
+        // push, pop methods -----------------------------------------------------
         bool push_back(T& value){
             std::lock_guard<std::mutex> lock(mq_);
             if (queue_.size() < max_queue_size_) {
@@ -112,31 +127,6 @@ namespace mtq{
             queue_.pop_front();
             return res;
         }
-        void set_fps(double fps){
-            std::lock_guard<std::mutex> lock_fps{mdata_};
-            if (fps < 0){
-                throw std::invalid_argument("ERROR: invalid fps, must be at least 0");
-            }
-            fps_ = fps;
-        }
-        double get_fps() const{
-            std::lock_guard<std::mutex> lock_fps{mdata_};
-            return fps_;
-        }
 
-        // operator overloads
-        T operator()(std::size_t i){
-            std::lock_guard<std::mutex> lock(mq_);
-            if (i >= queue_.size()) {
-                throw std::invalid_argument("ERROR: invalid index!");
-            }
-            return queue_[i];
-        }
-                
-        std::size_t size() const{
-            std::lock_guard<std::mutex> lock(mq_);
-            return queue_.size();
-        }
-        
     };
 };

@@ -16,11 +16,10 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metada
     if ( !cap.isOpened() ) return;
     
     double fps = cap.get(cv::CAP_PROP_FPS);
+    metadata.set_fps(fps);
+        
     std::size_t frame_count = cap.get(cv::CAP_PROP_FRAME_COUNT);
-    
-    frame_queue.set_fps(fps);
     cv::Mat end_of_stream {};
-    
     for (std::size_t frame_no {0}; frame_no < frame_count; ++frame_no){
         cv::Mat frame {};
         bool video_finished = !cap.read(frame);
@@ -43,7 +42,7 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metada
 void display_video(tsq& frame_queue, helpers::metadata& metadata){
     
     cv::Mat frame;
-    double fps {frame_queue.get_fps()};
+    double fps {metadata.get_fps()};
     while (true){
         if (!frame_queue.empty()){
             frame_queue.pop_back(std::ref(frame));
@@ -53,14 +52,16 @@ void display_video(tsq& frame_queue, helpers::metadata& metadata){
 
             cv::imshow("Gameplay",frame);
         }
-        if (cv::waitKey(1000/fps) == 27) return;
+        if (cv::waitKey(1000/fps) == 27) {
+            cv::destroyWindow("Gameplay");
+            return;
+        };
     }
 }
 
 int main(int argc, char** argv )
 {
     std::string path;
-    
     if (argc > 1){
         path = argv[1];
     }
@@ -71,7 +72,6 @@ int main(int argc, char** argv )
     tsq frame_queue{};
     helpers::metadata metadata{};
     cv::VideoCapture cap(path);
-    
     
     std::jthread display_thread(display_video, std::ref(frame_queue), std::ref(metadata));
     std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue), std::ref(metadata));

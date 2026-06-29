@@ -1,8 +1,0 @@
-[
-{
-  "directory": "/home/josh/Documents/Projects/FortniteAnalyser",
-  "command": "/usr/bin/c++  -isystem /usr/include/opencv4  -o CMakeFiles/FortniteAnalyser.dir/main.cpp.o -c /home/josh/Documents/Projects/FortniteAnalyser/main.cpp",
-  "file": "/home/josh/Documents/Projects/FortniteAnalyser/main.cpp",
-  "output": "CMakeFiles/FortniteAnalyser.dir/main.cpp.o"
-}
-]

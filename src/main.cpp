@@ -6,11 +6,12 @@
 #include <deque>
 #include <functional>
 #include <helpers/thread_safe_queue.hpp>
+#include <helpers/video_metadata.hpp>
 #include <chrono>
 
 using tsq = mtq::ThreadSafeQueue<cv::Mat>;
 
-void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue){
+void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metadata& metadata){
     // maybe we throw here instead?
     if ( !cap.isOpened() ) return;
     
@@ -20,7 +21,7 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue){
     frame_queue.set_fps(fps);
     cv::Mat end_of_stream {};
     
-    for (std::size_t i {0}; i < frame_count; ++i){
+    for (std::size_t frame_no {0}; frame_no < frame_count; ++frame_no){
         cv::Mat frame {};
         bool video_finished = !cap.read(frame);
         if (video_finished) {
@@ -39,7 +40,7 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue){
     std::cout << "eof: " << end_of_stream.total();
 }
 
-void display_video(tsq& frame_queue){
+void display_video(tsq& frame_queue, helpers::metadata& metadata){
     
     cv::Mat frame;
     double fps {frame_queue.get_fps()};
@@ -67,11 +68,13 @@ int main(int argc, char** argv )
         path = "./gameplay.mp4";
     }
 
-    tsq frame_queue{};  
+    tsq frame_queue{};
+    helpers::metadata metadata{};
     cv::VideoCapture cap(path);
     
-    std::jthread display_thread(display_video, std::ref(frame_queue));
-    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue));
+    
+    std::jthread display_thread(display_video, std::ref(frame_queue), std::ref(metadata));
+    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue), std::ref(metadata));
     
     return 0;
 }

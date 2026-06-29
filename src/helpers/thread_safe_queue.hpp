@@ -45,6 +45,10 @@ namespace mtq{
 
 
         // operator overloads -----------------------------------------------------
+        /**
+        * @brief Returns the value at index i.
+        * @warning throws if i is out of range
+        */
         T operator()(std::size_t i){
             std::lock_guard<std::mutex> lock(mq_);
             if (i >= queue_.size()) {
@@ -55,32 +59,61 @@ namespace mtq{
               
 
         // read-only methods -----------------------------------------------------
+        /**
+        * @brief Returns true if the queue has no elements.
+        */
         bool empty() const {
             std::lock_guard<std::mutex> lock(mq_);
             return queue_.empty();
         }
+
+        /**
+        * @brief Returns a read-only pointer to the back (oldest) element.
+        * @warning throws if queue is empty
+        */
         std::shared_ptr<const T> back() const{
             // maybe we could make these shared lock?
             std::lock_guard<std::mutex> lock(mq_);
+            if (queue_.size() < 1){
+                throw EmptyQueue();
+            }
             return std::make_shared(queue_.back());
         }
+
+        /**
+        * @brief Returns a read-only pointer to the front (newest) element.
+        * @warning throws if queue is empty
+        */
         std::shared_ptr<const T> front() const{
             std::lock_guard<std::mutex> lock(mq_);
+            if (queue_.size() < 1){
+                throw EmptyQueue();
+            }
             return std::make_shared(queue_.front());
         }
+
+        /**
+        * @brief Returns the current number of elements in the queue.
+        */
         std::size_t size() const{
             std::lock_guard<std::mutex> lock(mq_);
             return queue_.size();
         }
 
-        // get snapshot of entire deque
+        /**
+        * @brief Returns a copy of the entire underlying deque.
+        */
         std::deque<T> copy_queue() const{
             std::lock_guard<std::mutex> lock(mq_);
             return queue_;
         }       
 
         // push, pop methods -----------------------------------------------------
-        bool push_back(T& value){
+        /**
+        * @brief Pushes a value onto the back if there is space.
+                 returns false without pushing if the queue is full
+        */
+        bool try_push_back(T& value){
             std::lock_guard<std::mutex> lock(mq_);
             if (queue_.size() < max_queue_size_) {
                 queue_.push_back(std::move(value));
@@ -88,8 +121,12 @@ namespace mtq{
             }
             return false;
         }
-        
-        bool push_front(T& value){
+
+        /**
+        * @brief Pushes a value onto the front if there is space. 
+        *        returns false without pushing if the queue is full
+        */
+        bool try_push_front(T& value){
             std::lock_guard<std::mutex> lock(mq_);
             if (queue_.size() < max_queue_size_){
                 queue_.push_front(std::move(value));
@@ -97,14 +134,46 @@ namespace mtq{
             }
             return false;
         }
+
+        /**
+        * @brief Pushes a value onto the back of the queue, evicting an element if full.
+        * @warning if queue size > max queue size, will remove elements according to FIFO
+        */
+        void push_back(T& value){
+            std::lock_guard<std::mutex> lock(mq_);
+            if (queue_.size() >= max_queue_size_) {
+                queue_.pop_back();
+            }
+            queue_.push_back(std::move(value));
+        }
         
-        void pop_back(T& value){            
+        /**
+        * @brief Pushes a value onto the front of the queue, evicting an element if full.
+        * @warning if queue size > max queue size, will remove elements according to FIFO
+        */
+        void push_front(T& value){
+            std::lock_guard<std::mutex> lock(mq_);
+            if (queue_.size() >= max_queue_size_){
+                queue_.pop_back();
+            }
+            queue_.push_front(std::move(value));
+        }
+        
+        /**
+        * @brief Pops the back (oldest) element into value.
+        * @warning throws EmptyQueue if the queue is empty
+        */
+        void pop_back(T& value){
             std::lock_guard<std::mutex> lock(mq_);
             if (queue_.empty()) throw EmptyQueue();
             value = queue_.back();
             queue_.pop_back();
         }
-        
+
+        /**
+        * @brief Pops the back (oldest) element and returns it.
+        * @warning throws EmptyQueue if the queue is empty
+        */
         std::shared_ptr<T> pop_back(){
             std::lock_guard<std::mutex> lock(mq_);
             if (queue_.empty()) throw EmptyQueue();
@@ -113,16 +182,25 @@ namespace mtq{
             return res;
         }
 
+        /**
+        * @brief Pops the front (newest) element into value.
+        * @warning throws EmptyQueue if the queue is empty
+        */
         void pop_front(T& value){
             std::lock_guard<std::mutex> lock(mq_);
-            if (queue_.empty()) throw EmptyQueue();            
+            if (queue_.empty()) throw EmptyQueue();
             value = queue_.front();
             queue_.pop_front();
         }
+        
+        /**
+        * @brief Pops the front (newest) element and returns it.
+        * @warning throws EmptyQueue if the queue is empty
+        */
         std::shared_ptr<T> pop_front(){
             std::lock_guard<std::mutex> lock(mq_);
             if (queue_.empty()) throw EmptyQueue();
-            
+
             std::shared_ptr<T> const res = std::make_shared<T>(queue_.front());
             queue_.pop_front();
             return res;

@@ -27,12 +27,12 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metada
             break;
         }
         
-        while (!frame_queue.push_front(frame)) {
+        while (!frame_queue.try_push_front(frame)) {
             std::this_thread::sleep_for(std::chrono::milliseconds{static_cast<int>(1000/fps)});
         }
     }
     
-    while (!frame_queue.push_front(end_of_stream)) {
+    while (!frame_queue.try_push_front(end_of_stream)) {
             std::this_thread::sleep_for(std::chrono::milliseconds{static_cast<int>(1000/fps)});
     }
     

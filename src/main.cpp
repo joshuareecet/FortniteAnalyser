@@ -1,32 +1,42 @@
+#include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
+#include <opencv2/videoio.hpp>
+
+#include <SFML/Window.hpp>
+#include <SFML/Graphics.hpp>
+
+
 #include <thread>
 #include <functional>
-#include <helpers/thread_safe_queue.hpp>
-#include <helpers/video_metadata.hpp>
-#include <helpers/timers.hpp>
 #include <chrono>
+#include <algorithm>
+
+#include <helpers/thread_safe_queue.hpp>
+#include <helpers/video.hpp>
+#include <helpers/timers.hpp>
 
 using tsq = mtq::ThreadSafeQueue<cv::Mat>;
 
-void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metadata& metadata){
-    // maybe we throw here instead?
-    if ( !cap.isOpened() ) return;
-    
-    helpers::Timer timer {};
+helpers::metadata set_metadata(cv::VideoCapture& cap){
+    helpers::metadata metadata;
+    metadata.fps = cap.get(cv::CAP_PROP_FPS);
+    metadata.height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+    metadata.width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+    metadata.frame_count = cap.get(cv::CAP_PROP_FRAME_COUNT);
+    return metadata;
+}
 
-    double fps = cap.get(cv::CAP_PROP_FPS);
-    std::cout << "FPS: " << fps << std::endl;
-    metadata.set_fps(fps);
-    
-    std::size_t frame_count = cap.get(cv::CAP_PROP_FRAME_COUNT);
+void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metadata& metadata){
+
+    helpers::Timer timer {};
     cv::Mat end_of_stream {};
     
-    auto frame_time = std::chrono::microseconds(static_cast<int>(1000000/fps));
-    for (std::size_t frame_no {0}; frame_no < frame_count; ++frame_no){
+    auto frame_time = std::chrono::microseconds(static_cast<int>(1000000/metadata.fps));
+    cv::Mat frame {};
+
+    while (cap.read(frame)){
         timer.start();
         
-        cv::Mat frame {};
-        cap.read(frame);
         auto read_frame_t = timer.elapsed_time_ms();
 
         frame_queue.try_push_front(frame);
@@ -36,39 +46,80 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metada
     frame_queue.push_front(end_of_stream);
 }
 
-void display_video(tsq& frame_queue, helpers::metadata& metadata){
-    cv::Mat frame;
-    double fps {metadata.get_fps()};
-    cv::namedWindow("Gameplay", cv::WINDOW_NORMAL);
-    
-    helpers::Timer timer{};
-    auto frame_time = std::chrono::microseconds(static_cast<int>(1000000/fps));
-    while (true){
 
-        timer.start();
-        frame_queue.try_pop_back(frame);
-        auto pop_time = timer.elapsed_time_ms();
-        
-        // close if we got end_of_stream frame. we can switch to a signal later.
-        if (frame.total() == 0) return;
-        
-        auto window_create_time = timer.elapsed_time_ms()-pop_time;
-        cv::imshow("Gameplay",frame);
-        auto imshow_time = timer.elapsed_time_ms() - window_create_time;
+void display_video(tsq& frame_queue, helpers::metadata& metadata, helpers::DisplayTypes window_type){
+    cv::Mat frame;
+    helpers::Timer timer{};
+    auto frame_time = std::chrono::microseconds(static_cast<int>(1000000/metadata.fps));
+    
+    auto wait_time = [frame_time, &timer]() {
         auto total_time = timer.elapsed_time();
-        
         if (total_time < frame_time){
             std::this_thread::sleep_for(0.8*(frame_time-total_time));
             while (timer.elapsed_time() < frame_time) {}; 
         }
-        
-        timer.restart();
-        if (cv::pollKey() == 27) {
-            cv::destroyWindow("Gameplay");
-            return;
-        };
-        std::cout << "pollkey time: " << timer.elapsed_time_ms() << std::endl;
+    };
+
+    if (window_type == helpers::OPENCV) {
+        cv::namedWindow("Gameplay", cv::WINDOW_OPENGL);
+        while (true){
+            timer.start();
+            frame_queue.try_pop_back(frame);
+
+            cv::imshow("Gameplay",frame);        
+            if (cv::pollKey() == 27) {
+                cv::destroyWindow("Gameplay");
+                cv::pollKey();
+                return;
+            };
+
+            if (frame.total() == 0) return;
+            wait_time();
+        }
     }
+    else if (window_type == helpers::SFML){
+        //sf::Window window(sf::VideoMode({metadata.width,metadata.height}), "Gameplay", sf::Style::Default, sf::State::Fullscreen);
+        sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+        unsigned int win_width = std::min(metadata.width, desktop.size.x);
+        unsigned int win_height = std::min(metadata.height, desktop.size.y);
+
+        sf::RenderWindow window(sf::VideoMode({win_width, win_height}), "Gameplay");
+        sf::View view(sf::FloatRect({0.f, 0.f}, {static_cast<float>(metadata.width), static_cast<float>(metadata.height)}));
+        window.setView(view);
+
+        sf::Texture texture;
+        sf::Image img;
+        if (!texture.resize({metadata.width,metadata.height})){
+            return;
+        }
+
+        while (window.isOpen()){
+            timer.start();
+            
+            while (const std::optional event = window.pollEvent())
+            {
+                // "close requested" event: we close the window
+                if (event->is<sf::Event::Closed>()){
+                    window.close();
+                    return;
+                }
+            }
+
+            frame_queue.try_pop_back(frame);
+            if (frame.total() == 0) return;
+            
+            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGBA);
+            texture.update(frame.ptr());
+            sf::Sprite sprite(texture);
+            
+            window.clear(sf::Color::Black);
+            window.draw(sprite);
+            window.display();
+            
+            wait_time();
+        }
+    }
+    return;
 }
 
 int main(int argc, char** argv )
@@ -81,14 +132,16 @@ int main(int argc, char** argv )
         path = "./gameplay.mp4";
     }
 
-    tsq frame_queue{};
-    helpers::metadata metadata{};
     cv::VideoCapture cap(path);
-
+    if ( !cap.isOpened() ) return 1;
+    
+    // set metadata before we run threads that rely on it
+    helpers::metadata metadata = set_metadata(cap);
+    
+    tsq frame_queue{};
     std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue), std::ref(metadata));
-
-    // HighGUI (imshow/waitKey) is not thread-safe; it must run on the main thread on every platform.
-    display_video(frame_queue, metadata);
+    // running display in main thread to maximise portability
+    display_video(frame_queue, metadata, helpers::SFML);
 
     return 0;
 }

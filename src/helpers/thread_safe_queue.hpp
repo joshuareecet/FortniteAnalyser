@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <stdexcept>
@@ -154,6 +155,30 @@ namespace mtq{
             queue_pushed.notify_one();
         }
 
+        std::cv_status try_push_front(T& value, std::chrono::microseconds timeout){
+            std::unique_lock<std::mutex> lock(mq_);
+            
+            if (queue_.size() < max_queue_size_){
+                queue_.push_front(std::move(value));
+                
+                lock.unlock();
+                queue_pushed.notify_one();
+                return std::cv_status::no_timeout;
+            }
+            
+            if (queue_popped.wait_for(lock,timeout) == std::cv_status::no_timeout){
+                if (queue_.size() < max_queue_size_){
+                    queue_.push_front(std::move(value));
+                    
+                    lock.unlock();
+                    queue_pushed.notify_one();
+                    return std::cv_status::no_timeout;
+                }
+            }
+
+            return std::cv_status::timeout;
+        }
+
         void try_pop_back(T& value){
             std::unique_lock<std::mutex> lock(mq_);
             queue_pushed.wait(lock, [this](){return queue_.size() > 0;});
@@ -172,6 +197,31 @@ namespace mtq{
             
             lock.unlock();
             queue_popped.notify_one();
+        }
+
+        std::cv_status try_pop_front(T& value, std::chrono::microseconds timeout){
+            std::unique_lock<std::mutex> lock(mq_);
+            
+            if (queue_.size() > 0){
+                value = std::move(queue_.front());
+                queue_.pop_front();
+
+                lock.unlock();
+                queue_popped.notify_one();
+                return std::cv_status::no_timeout;
+            }
+            
+            if (queue_pushed.wait_for(lock,timeout) == std::cv_status::no_timeout){
+                if (queue_.size() > 0){
+                    value = std::move(queue_.front());
+                    queue_.pop_front();
+                    
+                    lock.unlock();
+                    queue_popped.notify_one();
+                    return std::cv_status::no_timeout;
+                }
+            }
+            return std::cv_status::timeout;
         }
 
         /**

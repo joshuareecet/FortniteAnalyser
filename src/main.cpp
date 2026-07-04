@@ -1,3 +1,4 @@
+#include <condition_variable>
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/videoio.hpp>
@@ -26,7 +27,7 @@ helpers::metadata set_metadata(cv::VideoCapture& cap){
     return metadata;
 }
 
-void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metadata& metadata){
+void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metadata& metadata, std::atomic_bool& stop_flag){
 
     helpers::Timer timer {};
     cv::Mat end_of_stream {};
@@ -35,13 +36,13 @@ void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metada
     cv::Mat frame {};
 
     while (cap.read(frame)){
-        timer.start();
-        
-        auto read_frame_t = timer.elapsed_time_ms();
 
-        frame_queue.try_push_front(frame);
-        auto total = timer.elapsed_time_ms();
-        //std::cout << std::format("Read frame time: {0}, Total time {1}", read_frame_t, total) << std::endl;
+        while (frame_queue.try_push_front(frame,std::chrono::microseconds(1)) == std::cv_status::timeout){
+            if (stop_flag){
+                frame_queue.push_front(end_of_stream);
+                return;
+            }
+        }
     }
     frame_queue.push_front(end_of_stream);
 }
@@ -118,6 +119,7 @@ void display_video(tsq& frame_queue, helpers::metadata& metadata, helpers::Displ
             
             wait_time();
         }
+        return;
     }
     return;
 }
@@ -137,11 +139,14 @@ int main(int argc, char** argv )
     
     // set metadata before we run threads that rely on it
     helpers::metadata metadata = set_metadata(cap);
-    
+    std::atomic_bool stop_flag {false};
     tsq frame_queue{};
-    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue), std::ref(metadata));
+    
+    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue), std::ref(metadata), std::ref(stop_flag));
+    
     // running display in main thread to maximise portability
     display_video(frame_queue, metadata, helpers::SFML);
+    stop_flag = true;
 
     return 0;
 }

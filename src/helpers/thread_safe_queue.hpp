@@ -21,7 +21,7 @@ namespace mtq{
     private:
     
     std::deque<T> queue_{};
-    std::size_t max_queue_size_ {};
+    std::size_t max_queue_size_ {10};
     double fps_ {60};
         
     mutable std::mutex mq_{};
@@ -31,8 +31,7 @@ namespace mtq{
     
     public:
         // Constructors
-        ThreadSafeQueue()
-        : max_queue_size_ {10} {}
+        ThreadSafeQueue() = default;
         
         ThreadSafeQueue(std::initializer_list<T> init_list, std::size_t max_queue_size)
             : queue_{init_list} , max_queue_size_{max_queue_size} {}

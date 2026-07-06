@@ -1,4 +1,4 @@
-#include <condition_variable>
+#include <memory>
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/videoio.hpp>
@@ -6,17 +6,26 @@
 #include <SFML/Window.hpp>
 #include <SFML/Graphics.hpp>
 
-
 #include <thread>
 #include <functional>
 #include <chrono>
 #include <algorithm>
 
-#include <helpers/thread_safe_queue.hpp>
+#include <helpers/frame_queue.hpp>
 #include <helpers/video.hpp>
 #include <helpers/timers.hpp>
 
-using tsq = mtq::ThreadSafeQueue<cv::Mat>;
+#if defined(__APPLE__)
+    #define VIDEO_CAP_BACKEND cv::CAP_AVFOUNDATION
+#elif defined(_WIN32)
+    #include <windows.h>
+    #define VIDEO_CAP_BACKEND cv::CAP_MSMF
+#else
+    #define VIDEO_CAP_BACKEND cv::CAP_V4L2
+#endif
+
+
+using fq = mtq::frame_queue<cv::Mat>;
 
 helpers::metadata set_metadata(cv::VideoCapture& cap){
     helpers::metadata metadata;
@@ -27,59 +36,66 @@ helpers::metadata set_metadata(cv::VideoCapture& cap){
     return metadata;
 }
 
-void capture_video_file(cv::VideoCapture& cap, tsq& frame_queue, helpers::metadata& metadata, std::atomic_bool& stop_flag){
-
-    helpers::Timer timer {};
-    cv::Mat end_of_stream {};
+void fill_queue(){
     
-    auto frame_time = std::chrono::microseconds(static_cast<int>(1000000/metadata.fps));
+}
+
+void capture_video_file(cv::VideoCapture& cap, std::vector<std::unique_ptr<fq>>& queues, helpers::metadata& metadata){
     cv::Mat frame {};
+    cv::Mat frame_clone{};
 
     while (cap.read(frame)){
-
-        while (frame_queue.try_push_front(frame,std::chrono::microseconds(1)) == std::cv_status::timeout){
-            if (stop_flag){
-                frame_queue.push_front(end_of_stream);
-                return;
-            }
+        for (auto& q : queues){
+            frame_clone = frame.clone();
+            if (!(*q).push(std::move(frame_clone))) return;
         }
     }
-    frame_queue.push_front(end_of_stream);
+    for (auto& q: queues){
+        (*q).close();
+    }
 }
 
 
-void display_video(tsq& frame_queue, helpers::metadata& metadata, helpers::DisplayTypes window_type){
+void display_video(fq& frame_queue, helpers::metadata& metadata, helpers::DisplayTypes window_type){
     cv::Mat frame;
+    std::shared_ptr<cv::Mat> frame_ptr {nullptr};
     helpers::Timer timer{};
     auto frame_time = std::chrono::microseconds(static_cast<int>(1000000/metadata.fps));
     
+    // lambda used to sleep in between displaying frames
     auto wait_time = [frame_time, &timer]() {
         auto total_time = timer.elapsed_time();
         if (total_time < frame_time){
-            std::this_thread::sleep_for(0.8*(frame_time-total_time));
-            while (timer.elapsed_time() < frame_time) {}; 
+            std::this_thread::sleep_for((frame_time-total_time));
+            //while (timer.elapsed_time() < frame_time) {}; 
         }
     };
 
+    // display using opencv backend
     if (window_type == helpers::OPENCV) {
-        cv::namedWindow("Gameplay", cv::WINDOW_OPENGL);
+        cv::namedWindow("Gameplay", cv::WINDOW_NORMAL);
         while (true){
             timer.start();
-            frame_queue.try_pop_back(frame);
-
-            cv::imshow("Gameplay",frame);        
-            if (cv::pollKey() == 27) {
-                cv::destroyWindow("Gameplay");
-                cv::pollKey();
+            
+            if (!frame_queue.pop(frame)) {
                 return;
             };
+            cv::imshow("Gameplay",frame);        
 
-            if (frame.total() == 0) return;
+            if (cv::pollKey() == 27) {
+                cv::destroyWindow("Gameplay");
+                // not sure why but window won't close unless you trigger the gui using pollkey again here
+                cv::pollKey();
+                frame_queue.close();
+                return;
+            };
+            
             wait_time();
         }
     }
+
+    //display using sfml backend
     else if (window_type == helpers::SFML){
-        //sf::Window window(sf::VideoMode({metadata.width,metadata.height}), "Gameplay", sf::Style::Default, sf::State::Fullscreen);
         sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
         unsigned int win_width = std::min(metadata.width, desktop.size.x);
         unsigned int win_height = std::min(metadata.height, desktop.size.y);
@@ -102,15 +118,19 @@ void display_video(tsq& frame_queue, helpers::metadata& metadata, helpers::Displ
                 // "close requested" event: we close the window
                 if (event->is<sf::Event::Closed>()){
                     window.close();
+                    frame_queue.close();
                     return;
                 }
             }
-
-            frame_queue.try_pop_back(frame);
-            if (frame.total() == 0) return;
             
-            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGBA);
-            texture.update(frame.ptr());
+            if (!frame_queue.pop(frame)){
+                window.close();
+                return;
+            }
+            
+            cv::Mat dst_frame {};
+            cv::cvtColor(frame, dst_frame, cv::COLOR_BGR2RGBA);
+            texture.update(dst_frame.ptr());
             sf::Sprite sprite(texture);
             
             window.clear(sf::Color::Black);
@@ -124,8 +144,16 @@ void display_video(tsq& frame_queue, helpers::metadata& metadata, helpers::Displ
     return;
 }
 
+void inventory_detect(fq& frame_queue){
+    
+}
+
 int main(int argc, char** argv )
 {
+    #ifdef _WIN32
+        timeBeginPeriod(1);
+    #endif
+
     std::string path;
     if (argc > 1){
         path = argv[1];
@@ -134,19 +162,28 @@ int main(int argc, char** argv )
         path = "./gameplay.mp4";
     }
 
-    cv::VideoCapture cap(path);
+    cv::VideoCapture cap(path, VIDEO_CAP_BACKEND);
     if ( !cap.isOpened() ) return 1;
-    
+
     // set metadata before we run threads that rely on it
     helpers::metadata metadata = set_metadata(cap);
-    std::atomic_bool stop_flag {false};
-    tsq frame_queue{};
     
-    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(frame_queue), std::ref(metadata), std::ref(stop_flag));
+    // initialise frame queues
+    std::unique_ptr<fq> display_queue = std::make_unique<fq>();
+    std::unique_ptr<fq> process_queue = std::make_unique<fq>();
     
-    // running display in main thread to maximise portability
-    display_video(frame_queue, metadata, helpers::SFML);
-    stop_flag = true;
+    std::vector<std::unique_ptr<fq>> queues_ {};
+    queues_.push_back(std::move(display_queue));
+    //queues_.push_back(std::move(process_queue));
+    
+    
+    // spawn threads
+    std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(queues_), std::ref(metadata));
+    display_video((*queues_[0]), metadata, helpers::SFML); // display needs to be in main thread for macos support
+    
+    #ifdef _WIN32
+        timeEndPeriod(1);
+    #endif
 
     return 0;
 }

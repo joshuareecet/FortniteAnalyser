@@ -22,10 +22,8 @@ namespace mtq{
     
     std::deque<T> queue_{};
     std::size_t max_queue_size_ {10};
-    double fps_ {60};
         
     mutable std::mutex mq_{};
-    mutable std::mutex mdata_{};
     mutable std::condition_variable queue_popped {};
     mutable std::condition_variable queue_pushed {};
     
@@ -37,8 +35,9 @@ namespace mtq{
             : queue_{init_list} , max_queue_size_{max_queue_size} {}
         
         ThreadSafeQueue(const ThreadSafeQueue& other){
-            std::lock_guard<std::mutex> lock(other.mq_);
-            queue_ = other.queue_;
+            std::scoped_lock<std::mutex,std::mutex> lock(mq_,other.mq_);
+            queue_ = std::move(other.queue_);
+            max_queue_size_ = other.max_queue_size_;
         }
         
         ThreadSafeQueue& operator=(const ThreadSafeQueue&) = delete;

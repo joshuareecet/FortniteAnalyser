@@ -40,18 +40,18 @@ void fill_queue(){
     
 }
 
-void capture_video_file(cv::VideoCapture& cap, std::vector<std::unique_ptr<fq>>& queues, helpers::metadata& metadata){
+void capture_video_file(cv::VideoCapture& cap, std::vector<fq>& queues, helpers::metadata& metadata){
     cv::Mat frame {};
     cv::Mat frame_clone{};
 
     while (cap.read(frame)){
         for (auto& q : queues){
             frame_clone = frame.clone();
-            if (!(*q).push(std::move(frame_clone))) return;
+            if (!q.push(std::move(frame_clone))) return;
         }
     }
     for (auto& q: queues){
-        (*q).close();
+        (q).close();
     }
 }
 
@@ -144,8 +144,19 @@ void display_video(fq& frame_queue, helpers::metadata& metadata, helpers::Displa
     return;
 }
 
-void inventory_detect(fq& frame_queue){
-    
+void inventory_detect(fq& frame_queue, fq& target_queue, helpers::metadata metadata){
+    cv::Mat frame{};
+
+    int height = metadata.height;
+    int width = metadata.width;
+
+    while (frame_queue.pop(frame)){
+        cv::Rect roi(0.75*width,0.85*height,0.25*width,0.15*height);
+        cv::Mat cropped_img = frame(roi).clone();
+        cv::imshow("cropped",cropped_img);                          
+        //auto frame_clone = frame.clone();
+        //if (!target_queue.push(frame)) return;
+    }
 }
 
 int main(int argc, char** argv )
@@ -169,17 +180,18 @@ int main(int argc, char** argv )
     helpers::metadata metadata = set_metadata(cap);
     
     // initialise frame queues
-    std::unique_ptr<fq> display_queue = std::make_unique<fq>();
-    std::unique_ptr<fq> process_queue = std::make_unique<fq>();
+    fq display_queue {30};
+    fq process_queue {30};
     
-    std::vector<std::unique_ptr<fq>> queues_ {};
-    queues_.push_back(std::move(display_queue));
-    //queues_.push_back(std::move(process_queue));
+    std::vector<fq> queues_ {};
+    queues_.push_back(display_queue);
+    queues_.push_back(process_queue);
     
     
     // spawn threads
     std::jthread capture_thread(capture_video_file, std::ref(cap), std::ref(queues_), std::ref(metadata));
-    display_video((*queues_[0]), metadata, helpers::SFML); // display needs to be in main thread for macos support
+    std::jthread inv_thread(inventory_detect, std::ref(process_queue), std::ref(display_queue), std::ref(metadata));
+    display_video(display_queue, metadata, helpers::SFML); // display needs to be in main thread for macos support
     
     #ifdef _WIN32
         timeEndPeriod(1);

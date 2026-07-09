@@ -11,119 +11,95 @@ namespace mtq{
     template <typename T>
     class frame_queue{
         private:
-            bool closed {false};
-            size_t max_size {10};
-            mutable std::mutex mq {};
-            mutable std::condition_variable not_empty;
-            mutable std::condition_variable not_full;
-            std::deque<T> queue {};
+            struct Members{
+                bool closed {false};
+                size_t max_size {10};
+                mutable std::mutex mq {};
+                mutable std::condition_variable not_empty;
+                mutable std::condition_variable not_full;
+                std::deque<T> queue {};
+            };
+            std::shared_ptr<Members> m {};
 
         public:
-            frame_queue() = default;
-            frame_queue(const frame_queue& b) = delete;
-            frame_queue& operator=(const frame_queue&) = delete;
-            
-            frame_queue& operator=(frame_queue&& other){
-                
-                if (this == &other) {
-                    return *this;
-                }
-
-                {
-                    std::scoped_lock<std::mutex,std::mutex> lock(mq,other.mq);
-                    queue = std::move(other.queue);
-                    max_size = other.max_size;
-                    closed = other.closed;
-
-                    other.closed = true;
-                }
-                
-                not_empty.notify_all();
-                not_full.notify_all();
-                other.not_empty.notify_all();
-                other.not_full.notify_all();
-                return *this;
+            frame_queue() {
+                m = std::make_shared<Members>();
             };
-            
-            frame_queue(frame_queue&& other){
-                {
-                    std::scoped_lock<std::mutex,std::mutex> lock(mq,other.mq);
-                    queue = std::move(other.queue);
-                    max_size = other.max_size;
-                    closed = other.closed;
-                    other.closed = true;
-                }
-                other.not_empty.notify_all();
-                other.not_full.notify_all();
-            };
-            ~frame_queue() = default;
 
-            frame_queue(size_t size_, std::deque<T> queue_)
-            : max_size{size_}, queue{std::move(queue_)} {};
+            frame_queue(size_t size_){
+                m = std::make_shared<Members>();
+                m->max_size = size_;
+            }
+
+            frame_queue(size_t size_, std::deque<T> queue_){
+                m = std::make_shared<Members>();
+                m->max_size = size_;
+                m->queue = std::move(queue_);
+            };
 
             size_t size() const {
-                std::lock_guard<std::mutex> lock(mq);
-                return queue.size();
+                std::lock_guard<std::mutex> lock(m->mq);
+                return m->queue.size();
             }
 
             void close(){
-                std::unique_lock<std::mutex> lock (mq);
-                closed = true;
+                std::unique_lock<std::mutex> lock (m->mq);
+                m->closed = true;
                 lock.unlock();
-                not_empty.notify_all();
-                not_full.notify_all();
+                m->not_empty.notify_all();
+                m->not_full.notify_all();
             }
             void resume(){
-                std::lock_guard<std::mutex> lock (mq);
-                closed = false;
+                std::lock_guard<std::mutex> lock (m->mq);
+                m->closed = false;
             }
             void clear(){
-                std::unique_lock<std::mutex> lock (mq);
-                queue.clear();
+                std::unique_lock<std::mutex> lock (m->mq);
+                m->queue.clear();
                 lock.unlock();
-                not_full.notify_all();
+                m->not_full.notify_all();
             }
 
             [[nodiscard]] bool pop(T& value){   
-                std::unique_lock<std::mutex> lock(mq);
+                std::unique_lock<std::mutex> lock(m->mq);
                 
-                not_empty.wait(lock,[this](){return queue.size() > 0 || closed;});
-                if (closed && queue.size() < 1) return false;
+                m->not_empty.wait(lock,[this](){return m->queue.size() > 0 || m->closed;});
+                if (m->closed && m->queue.size() < 1) return false;
                 
-                value = std::move(queue.back());
-                queue.pop_back();
+                value = std::move(m->queue.back());
+                m->queue.pop_back();
 
                 lock.unlock();
-                not_full.notify_one();
+                m->not_full.notify_one();
 
                 return true;
             }
             
             [[nodiscard]] std::shared_ptr<T> pop(){
-                std::unique_lock<std::mutex> lock(mq);
+                std::unique_lock<std::mutex> lock(m->mq);
                 
-                not_empty.wait(lock,[this](){return queue.size() > 0 || closed;});
-                if (closed && queue.size() < 1) return nullptr;
+                m->not_empty.wait(lock,[this](){return m->queue.size() > 0 || m->closed;});
+                if (m->closed && m->queue.size() < 1) return nullptr;
                 
-                std::shared_ptr<T> value = std::make_shared<T>(std::move(queue.back()));
-                queue.pop_back();
+                std::shared_ptr<T> value = std::make_shared<T>(std::move(m->queue.back()));
+                m->queue.pop_back();
 
                 lock.unlock();
-                not_full.notify_one();
+                m->not_full.notify_one();
 
                 return value;
             }
             
             [[nodiscard]] bool push(T value){   
-                std::unique_lock<std::mutex> lock(mq);
+                std::unique_lock<std::mutex> lock(m->mq);
                 
-                not_full.wait(lock,[this](){return queue.size() < max_size || closed;});
-                if (closed) return false;
+                m->not_full.wait(lock,[this](){return m->queue.size() < m->max_size || m->closed;});
+                if (m->closed) return false;
                 
-                queue.push_front(std::move(value));
+                m->queue.push_front(std::move(value));
 
                 lock.unlock();
-                not_empty.notify_one();
+                m->not_empty.notify_one();
 
                 return true;
             }
